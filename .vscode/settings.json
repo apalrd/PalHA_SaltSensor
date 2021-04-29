@@ -1,0 +1,8 @@
+{
+    "files.associations": {
+        "esp_eth_phy.h": "c",
+        "esp_eth_com.h": "c",
+        "esp_eth_mac.h": "c",
+        "sdkconfig.h": "c"
+    }
+}
