@@ -18,4 +18,5 @@
 /* Function prototypes */
 void maxbotix_init(void);
 uint16_t maxbotix_get_latest(void);
+int32_t maxbotix_get_age(void);
 float maxbotix_get_median(float pct,int16_t min_count,int16_t max_count,int16_t *act_count);

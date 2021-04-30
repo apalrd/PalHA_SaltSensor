@@ -17,20 +17,20 @@
 
 static const char *TAG = "ethernet";
 
+char eth_mac[6];
+
 /** Event handler for Ethernet events */
 static void eth_event_handler(void *arg, esp_event_base_t event_base,
                               int32_t event_id, void *event_data)
 {
-    uint8_t mac_addr[6] = {0};
     /* we can get the ethernet driver handle from event data */
     esp_eth_handle_t eth_handle = *(esp_eth_handle_t *)event_data;
 
     switch (event_id) {
     case ETHERNET_EVENT_CONNECTED:
-        esp_eth_ioctl(eth_handle, ETH_CMD_G_MAC_ADDR, mac_addr);
         ESP_LOGI(TAG, "Ethernet Link Up");
         ESP_LOGI(TAG, "Ethernet HW Addr %02x:%02x:%02x:%02x:%02x:%02x",
-                 mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5]);
+                 eth_mac[0], eth_mac[1], eth_mac[2], eth_mac[3], eth_mac[4], eth_mac[5]);
         break;
     case ETHERNET_EVENT_DISCONNECTED:
         ESP_LOGI(TAG, "Ethernet Link Down");
@@ -61,7 +61,7 @@ static void got_ip_event_handler(void *arg, esp_event_base_t event_base,
     ESP_LOGI(TAG, "~~~~~~~~~~~");
 }
 
-void eth_begin(void)
+void eth_init(void)
 {
     // Initialize TCP/IP network interface (should be called only once in application)
     ESP_ERROR_CHECK(esp_netif_init());
@@ -124,6 +124,11 @@ void eth_begin(void)
     ESP_ERROR_CHECK(esp_netif_attach(eth_netif, esp_eth_new_netif_glue(eth_handle)));
     /* start Ethernet driver state machine */
     ESP_ERROR_CHECK(esp_eth_start(eth_handle));
+
+    /* Get MAC Addr so the rest of the code can use it */
+    esp_eth_ioctl(eth_handle, ETH_CMD_G_MAC_ADDR, eth_mac);
+    ESP_LOGI(TAG, "Ethernet HW Addr %02x:%02x:%02x:%02x:%02x:%02x",
+                 eth_mac[0], eth_mac[1], eth_mac[2], eth_mac[3], eth_mac[4], eth_mac[5]);
 
     ESP_LOGI(TAG,"Completed Ethernet initialization");
 }

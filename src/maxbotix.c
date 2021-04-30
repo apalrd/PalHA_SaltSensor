@@ -16,10 +16,10 @@ static const char *TAG = "maxbotix";
 static QueueHandle_t uart_queue;
 
 /* Return data buffer in centimeters integer */
-static uint16_t samples[MAXBOTIX_SAMPLE_BUFFER_SIZE];
-static int16_t sample_next = 0; 
-static int16_t sample_count = 0;
-static TickType_t sample_last = 0;
+static volatile uint16_t samples[MAXBOTIX_SAMPLE_BUFFER_SIZE];
+static volatile int16_t sample_next = 0; 
+static volatile int16_t sample_count = 0;
+static volatile TickType_t sample_last = 0;
 
 /* Semaphore to lock sample data */
 SemaphoreHandle_t sample_lock = NULL;
@@ -29,11 +29,10 @@ static void maxbotix_event_handler(void *pvParameters)
 {
     uart_event_t event;
     size_t buffered_size;
-    uint8_t* dtmp = (uint8_t*) malloc(BUF_SIZE);
+    static uint8_t dtmp[BUF_SIZE];
     for(;;) {
         //Waiting for UART event.
         if(xQueueReceive(uart_queue, (void * )&event, (portTickType)portMAX_DELAY)) {
-            bzero(dtmp, BUF_SIZE);
             switch(event.type) {
                 //Event of UART receving data
                 /*We'd better handler data event fast, there would be much more data events than
@@ -84,10 +83,7 @@ static void maxbotix_event_handler(void *pvParameters)
                         ESP_LOGE(TAG,"UART Pattern Buffer Full, flushing");
                         uart_flush_input(MAXBOTIX_UART_NUM);
                     } else {
-                        uart_read_bytes(MAXBOTIX_UART_NUM, dtmp, pos, 100 / portTICK_PERIOD_MS);
-                        uint8_t pat[1 + 1];
-                        memset(pat, 0, sizeof(pat));
-                        uart_read_bytes(MAXBOTIX_UART_NUM, pat, 1, 100 / portTICK_PERIOD_MS);
+                        uart_read_bytes(MAXBOTIX_UART_NUM, dtmp, pos+1, 100 / portTICK_PERIOD_MS);
                         ESP_LOGV(TAG, "read data: %s", dtmp);
                         int32_t temp = 0;
                         uint32_t ret = sscanf((char*)dtmp,"R%d",&temp);
@@ -149,8 +145,6 @@ static void maxbotix_event_handler(void *pvParameters)
             }
         }
     }
-    free(dtmp);
-    dtmp = NULL;
     vTaskDelete(NULL);
 }
 
@@ -169,7 +163,11 @@ void maxbotix_init(void)
         .source_clk = UART_SCLK_APB,
     };
     //Install UART driver, and get the queue.
-    uart_driver_install(MAXBOTIX_UART_NUM, BUF_SIZE * 2, BUF_SIZE * 2, 20, &uart_queue, 0);
+    int intr_alloc_flags = 0;
+#if CONFIG_UART_ISR_IN_IRAM
+    intr_alloc_flags = ESP_INTR_FLAG_IRAM;
+#endif
+    uart_driver_install(MAXBOTIX_UART_NUM, BUF_SIZE * 4, BUF_SIZE, 50, &uart_queue, intr_alloc_flags);
     uart_param_config(MAXBOTIX_UART_NUM, &uart_config);
 
     //Set UART log level
@@ -203,7 +201,7 @@ void maxbotix_init(void)
     xSemaphoreGive(sample_lock);
 
     /* Create a task to handler UART event from ISR */
-    xTaskCreate(maxbotix_event_handler, "maxbotix_event_handler", 2048, NULL, 12, NULL);
+    xTaskCreatePinnedToCore(maxbotix_event_handler, "maxbotix_event_handler", 2048, NULL, configMAX_PRIORITIES, NULL,1);
 }
 
 /* Routine to return the latest sample */
@@ -223,6 +221,15 @@ uint16_t maxbotix_get_latest(void)
     xSemaphoreGive(sample_lock);
 
     return RetVal;
+}
+
+int32_t maxbotix_get_age(void)
+{
+    /* If data is too old, return -1 */
+    TickType_t now = xTaskGetTickCount();
+    TickType_t delta = now - sample_last;
+    int32_t delta_ms = pdTICKS_TO_MS(delta);
+    return delta_ms;
 }
 
 void print_samples(uint16_t *arr,int16_t count)
@@ -253,7 +260,7 @@ float maxbotix_get_median(float pct,int16_t min_count,int16_t max_count,int16_t 
     xSemaphoreTake(sample_lock,portMAX_DELAY);
 
     /* Copy all data to our clone buffers */
-    memcpy(my_samples_raw,samples,MAXBOTIX_SAMPLE_BUFFER_SIZE*sizeof(uint16_t));
+    memcpy(my_samples_raw,(void *)samples,MAXBOTIX_SAMPLE_BUFFER_SIZE*sizeof(uint16_t));
     my_sample_next = sample_next;
     my_sample_count = sample_count;
     my_sample_last = sample_last;
@@ -278,14 +285,21 @@ float maxbotix_get_median(float pct,int16_t min_count,int16_t max_count,int16_t 
     if(min_count < 1)
     {
         ESP_LOGW(TAG,"Invalid minimum count to perform median filter");
-        return -1.0f;
+        return -2.0f;
+    }
+
+    /* If percent is out of range, return -1 */
+    if(pct < 0.0f || pct > 1.0f)
+    {
+        ESP_LOGW(TAG,"Invalid percentage to perform median filter");
+        return -3.0f;
     }
 
     /* If below min count, return -1 */
     if(my_sample_count < min_count)
     {
         ESP_LOGW(TAG,"Not enough samples to perform median filter");
-        return -1.0f;
+        return -4.0f;
     }
 
     /* Copy the lower of max_count or actual sample count into the selected array */
@@ -344,24 +358,4 @@ float maxbotix_get_median(float pct,int16_t min_count,int16_t max_count,int16_t 
 
     return mean;
 
-}
-/* Function to sort an array using insertion sort*/
-void insertionSort(int arr[], int n)
-{
-    int i, key, j;
-    for (i = 1; i < n; i++)
-    {
-        key = arr[i];
-        j = i - 1;
- 
-        /* Move elements of arr[0..i-1], that are
-        greater than key, to one position ahead
-        of their current position */
-        while (j >= 0 && arr[j] > key)
-        {
-            arr[j + 1] = arr[j];
-            j = j - 1;
-        }
-        arr[j + 1] = key;
-    }
 }
