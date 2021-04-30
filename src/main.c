@@ -13,6 +13,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
+#include "maxbotix.h"
 
 static const char *TAG = "main";
 
@@ -22,10 +23,20 @@ void app_main(void)
     void eth_begin();
     eth_begin();
 
+    /* Call Maxbotix function */
+    maxbotix_init();
+
+    /* Reduce logging from maxbotix */
+    esp_log_level_set("maxbotix", ESP_LOG_WARN);
+
 
     while(1)
     {
-        ESP_LOGI(TAG,"Continuing to do things");
+        uint16_t sample = maxbotix_get_latest();
+        int16_t count = 0;
+        ESP_LOGI(TAG,"Continuing to do things, latest sample is %d",sample);
+        float result = maxbotix_get_median(0.6f,8,64,&count);
+        ESP_LOGI(TAG,"Median sample returned %f, sample count %d",(double)result,count);
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
